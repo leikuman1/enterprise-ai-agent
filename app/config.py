@@ -27,6 +27,17 @@ class Settings(BaseSettings):
     )
     openai_model: str = Field(default="gpt-4o-mini", description="默认对话模型")
 
+    embedding_api_base: str = Field(default="", description="Embedding API 基础地址")
+    embedding_api_key: str = Field(default="", description="Embedding API Key")
+    embedding_model: str = Field(default="", description="Embedding 模型")
+    embedding_dimension: int = Field(default=1024, description="Embedding 向量维度")
+    embedding_timeout_seconds: float = Field(default=30, description="Embedding 请求超时（秒）")
+
+    rerank_api_base: str = Field(default="", description="Rerank API 基础地址")
+    rerank_api_key: str = Field(default="", description="Rerank API Key")
+    rerank_model: str = Field(default="", description="Rerank 模型")
+    rerank_timeout_seconds: float = Field(default=30, description="Rerank 请求超时（秒）")
+
     database_url: str = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost:5432/agent_db",
         description="SQLAlchemy 异步数据库 URL（推荐 postgresql+asyncpg）",

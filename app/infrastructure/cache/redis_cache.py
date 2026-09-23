@@ -53,7 +53,7 @@ class RedisCache:
     ) -> None:
         """
         :param url: Redis 连接 URL
-        :param semantic_embedder: 可选，具备 encode(texts)->np.ndarray 的编码器（如 SentenceTransformer）
+        :param semantic_embedder: 可选，具备 embed_query(text)->list[float] 的嵌入对象
         :param max_semantic_scan: 语义匹配时最多扫描的缓存条目数
         """
         if aioredis is None:
@@ -90,12 +90,8 @@ class RedisCache:
         if self._semantic_embedder is not None:
 
             def _run():
-                emb = self._semantic_embedder.encode(
-                    [q],
-                    convert_to_numpy=True,
-                    show_progress_bar=False,
-                )
-                v = np.asarray(emb[0], dtype=np.float64)
+                emb = self._semantic_embedder.embed_query(q)
+                v = np.asarray(emb, dtype=np.float64)
                 n = np.linalg.norm(v)
                 if n > 0:
                     v = v / n
@@ -158,15 +154,12 @@ class RedisCache:
                 value = str(payload.get("value", ""))
                 emb_list = payload.get("embedding")
 
-                if emb_list is not None:
+                valid_embedding = isinstance(emb_list, list) and len(emb_list) == len(q_vec)
+                if valid_embedding:
                     s_vec = np.asarray(emb_list, dtype=np.float64)
                     sim = self._cosine(q_vec, s_vec)
                 else:
                     sim = _token_jaccard(q_norm, _normalize_text(stored_query))
-
-                # 混合字符级 Jaccard，避免嵌入缺失时过于粗糙
-                if emb_list is None:
-                    sim = max(sim, _token_jaccard(q_norm, _normalize_text(stored_query)))
 
                 if sim > best_sim:
                     best_sim = sim

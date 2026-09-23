@@ -25,10 +25,29 @@
 | 缓存 | Redis |
 | 关系库 | PostgreSQL、SQLAlchemy |
 | 配置与校验 | Pydantic v2、pydantic-settings |
-| 文档处理 | unstructured、pypdf、sentence-transformers |
+| 文档处理 | unstructured、pypdf |
 | 日志与韧性 | loguru、tenacity、httpx |
 
 ## 快速开始
+
+### 远程 Embedding 与 Rerank
+
+如需在 RAG 或语义缓存模块中使用远程模型，在 `.env` 中分别配置独立服务：
+
+```dotenv
+EMBEDDING_API_BASE=https://your-embedding-service.example/v1
+EMBEDDING_API_KEY=your-embedding-key
+EMBEDDING_MODEL=your-1024-dimension-model
+EMBEDDING_DIMENSION=1024
+
+RERANK_API_BASE=https://your-rerank-service.example/v2
+RERANK_API_KEY=your-rerank-key
+RERANK_MODEL=your-rerank-model
+```
+
+Embedding 服务必须兼容 OpenAI `/embeddings` 接口并支持 `dimensions=1024`；Rerank 服务必须兼容 Cohere 风格的 `BASE/rerank` 接口。构造 `RemoteEmbedding.from_settings()` 后，可将对象注入 `MultiRetriever`、`LongTermMemory` 或 `RedisCache`；构造 `Reranker.from_settings()` 后可调用其异步 `rerank()` 方法。缺少配置仅在构造对应客户端时报错，现有上传和聊天接口不会自动调用这些模块。
+
+默认安装已移除本地 `sentence-transformers`、PyTorch 和 CUDA 依赖。已有 Milvus 集合若使用其他维度，需建立 1024 维集合并重新生成向量。
 
 ### 本地开发
 

@@ -1,45 +1,47 @@
 # -*- coding: utf-8 -*-
-"""Cross-Encoder 重排序模块。"""
+"""通过 Cohere 风格的远程 API 对检索结果重排序。"""
 
 from __future__ import annotations
 
-import asyncio
+import math
 from typing import Any
 
-from loguru import logger
+import httpx
 
+from app.config import Settings, get_settings
 from app.models.schemas import RetrievalResult
 
 
 class Reranker:
-    """重排序器：使用 Cross-Encoder 对检索结果重新排序。"""
+    """使用独立配置调用远程 Rerank API。"""
 
     def __init__(
         self,
-        model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
-        device: str | None = None,
+        *,
+        api_base: str,
+        api_key: str,
+        model: str,
+        timeout_seconds: float = 30,
     ) -> None:
-        """
-        :param model_name: sentence-transformers CrossEncoder 模型名或路径
-        :param device: 如 cuda / cpu / mps，None 表示由库自动选择
-        """
-        self._model_name = model_name
-        self._device = device
-        self._model: Any = None
+        if not api_base.strip() or not api_key.strip() or not model.strip():
+            raise ValueError("RERANK_API_BASE、RERANK_API_KEY 和 RERANK_MODEL 必须配置")
+        if timeout_seconds <= 0:
+            raise ValueError("RERANK_TIMEOUT_SECONDS 必须大于 0")
 
-    def _load_model(self) -> Any:
-        """懒加载 CrossEncoder。"""
-        if self._model is not None:
-            return self._model
-        try:
-            from sentence_transformers import CrossEncoder
-        except ImportError as e:
-            raise RuntimeError("请安装 sentence-transformers 以使用 Reranker") from e
-        kwargs: dict[str, Any] = {}
-        if self._device:
-            kwargs["device"] = self._device
-        self._model = CrossEncoder(self._model_name, **kwargs)
-        return self._model
+        self._url = api_base.rstrip("/") + "/rerank"
+        self._api_key = api_key
+        self._model = model
+        self._timeout_seconds = timeout_seconds
+
+    @classmethod
+    def from_settings(cls, settings: Settings | None = None) -> Reranker:
+        settings = settings or get_settings()
+        return cls(
+            api_base=settings.rerank_api_base,
+            api_key=settings.rerank_api_key,
+            model=settings.rerank_model,
+            timeout_seconds=settings.rerank_timeout_seconds,
+        )
 
     async def rerank(
         self,
@@ -47,38 +49,65 @@ class Reranker:
         documents: list[RetrievalResult],
         top_k: int = 5,
     ) -> list[RetrievalResult]:
-        """对文档列表按与 query 相关性重排，返回 top_k。"""
-        if not documents:
-            return []
-        if top_k <= 0:
+        if not documents or top_k <= 0:
             return []
 
-        def _sync_predict() -> list[float]:
-            model = self._load_model()
-            pairs = [(query, d.content) for d in documents]
-            raw = model.predict(pairs)
-            if hasattr(raw, "tolist"):
-                return list(raw.tolist())  # type: ignore[no-any-return]
-            return list(raw)
-
+        body = {
+            "model": self._model,
+            "query": query,
+            "documents": [document.content for document in documents],
+            "top_n": min(top_k, len(documents)),
+        }
         try:
-            scores = await asyncio.to_thread(_sync_predict)
-        except Exception as e:
-            logger.exception("CrossEncoder 推理失败: {}", e)
-            raise RuntimeError(f"重排序失败: {e}") from e
+            async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+                response = await client.post(
+                    self._url,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    json=body,
+                )
+                response.raise_for_status()
+                payload: Any = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"Rerank API 请求失败（HTTP {exc.response.status_code}）") from None
+        except httpx.TimeoutException:
+            raise RuntimeError("Rerank API 请求超时") from None
+        except httpx.RequestError:
+            raise RuntimeError("Rerank API 连接失败") from None
+        except ValueError:
+            raise RuntimeError("Rerank API 返回了无效 JSON") from None
 
-        if len(scores) != len(documents):
-            raise RuntimeError("重排序分数数量与文档数量不一致")
+        if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+            raise RuntimeError("Rerank API 响应缺少 results 列表")
+        results = payload["results"]
+        if len(results) != body["top_n"]:
+            raise RuntimeError("Rerank API 返回结果数与 top_n 不匹配")
 
-        ranked = sorted(
-            zip(documents, scores, strict=True),
-            key=lambda x: float(x[1]),
-            reverse=True,
-        )
-        out: list[RetrievalResult] = []
-        for doc, sc in ranked[:top_k]:
-            new_doc = doc.model_copy(deep=True)
-            new_doc.score = float(sc)
-            new_doc.metadata = {**new_doc.metadata, "rerank_score": float(sc)}
-            out.append(new_doc)
-        return out
+        ranked: list[RetrievalResult] = []
+        seen: set[int] = set()
+        for item in results:
+            if not isinstance(item, dict):
+                raise RuntimeError("Rerank API 返回了无效结果项")
+            index = item.get("index")
+            score = item.get("relevance_score")
+            if (
+                not isinstance(index, int)
+                or isinstance(index, bool)
+                or not 0 <= index < len(documents)
+            ):
+                raise RuntimeError("Rerank API 返回了无效索引")
+            if index in seen:
+                raise RuntimeError("Rerank API 返回了重复索引")
+            if (
+                not isinstance(score, (int, float))
+                or isinstance(score, bool)
+                or not math.isfinite(score)
+            ):
+                raise RuntimeError("Rerank API 返回了无效相关性分数")
+            seen.add(index)
+            doc = documents[index].model_copy(deep=True)
+            doc.score = float(score)
+            doc.metadata = {**doc.metadata, "rerank_score": float(score)}
+            ranked.append(doc)
+
+        ranked.sort(key=lambda document: document.score, reverse=True)
+        return ranked
