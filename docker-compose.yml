@@ -7,7 +7,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/agent_db
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agent_db
       REDIS_URL: redis://redis:6379/0
       MILVUS_HOST: milvus
       MILVUS_PORT: "19530"
