@@ -8,7 +8,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN python -m pip install -r requirements.txt
+RUN python -m pip install \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    --timeout 300 \
+    --retries 10 \
+    -r requirements.txt
 
 COPY app ./app
 
