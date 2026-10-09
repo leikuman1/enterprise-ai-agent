@@ -85,6 +85,15 @@ docker compose up -d --build
 
 Compose 包含 **app、postgres、redis、milvus**，以及 Milvus 官方 Standalone 模式所需的 **etcd、minio**（向量与元数据存储依赖，非业务微服务）。应用默认映射 `8000` 端口。
 
+PostgreSQL 首次初始化空数据卷时，由 `POSTGRES_DB` 创建 `agent_db`，并自动执行根目录的 `init.sql`，创建与 ORM 模型一致的表、外键和索引。已有数据卷不会自动执行初始化脚本；如已部署但缺少表，可手动补齐（无需删除数据卷）：
+
+```bash
+docker compose cp ./init.sql postgres:/tmp/agent-init.sql
+docker compose exec -T postgres psql -U postgres -d agent_db -v ON_ERROR_STOP=1 -f /tmp/agent-init.sql
+```
+
+脚本可重复执行，保留已有表和数据；不负责迁移已有表结构。
+
 首次启动 Milvus 可能需要数十秒就绪；若应用启动过快导致连不上 Milvus，可在生产环境中为 app 增加重试或 `depends_on` 健康检查策略。
 
 ## 目录结构说明
